@@ -1,0 +1,488 @@
+---
+title: "Spillover Data Panel Spasial dan Local Indicator Of Spatial Association (LISA)"
+author: "Deri Siswara"
+date: "Agustus 2023"
+toc: true
+format:
+  html:
+    html-math-method: katex
+    code-tools: true
+    self-contained: true
+---
+
+## Library
+
+```{r}
+library(plm)
+library(spdep)
+library(rgdal)
+library(spatialreg)
+library(splm)
+library(readxl)
+library(lmtest)
+library(tidyverse)
+library(MLmetrics)
+library(ggplot2)
+library(dplyr)
+```
+
+## Data
+
+```{r}
+panelbelitung <- read_excel("D:/Project/_2023/Analisis Spasial Belitung/Databelitung.xlsx")
+head(panelbelitung)
+```
+
+```{r}
+cor(panelbelitung[3:9])
+```
+
+## Regresi Data Panel Statis
+
+```{r}
+modelpanel1 = log(Stunting) ~ log(AnggaranStunting) + log(PDRBTambang) + log(PDRBuk) + log(IPM) + log(AngkaKesakitan)  + log(Kemiskinan)
+```
+
+```{r}
+reglin <- lm(modelpanel1, panelbelitung)
+step(reglin, direction = "both")
+```
+
+```{r}
+modelpanel2 <- log(Stunting) ~ log(AnggaranStunting) + log(PDRBTambang) + log(PDRBuk) + log(IPM)
+#modelpanel2 <- log(Stunting) ~ log(AnggaranStunting) + log(PDRBTambang) + log(PDRBuk) + log(IPM) + log(AngkaKesakitan) + log(Kemiskinan)
+```
+
+
+```{r}
+fem1 = plm(modelpanel2, data=panelbelitung, index=c("Kabupaten", "Tahun"), model="within")
+rem1 = plm(modelpanel2, data=panelbelitung, index=c("Kabupaten", "Tahun"), model="random")
+phtest(fem1, rem1) # Uji Hausman
+
+# H0 = REM
+# H1 = FEM
+summary(rem1)
+```
+
+```{r}
+# Uji asumsi regresi
+bptest(rem1) # Heteroskedastisitas
+pbgtest(rem1) # Autokorelasi
+```
+
+#### Uji Dependensi Spasial
+
+```{r}
+pcdtest(fem1, test="lm")
+pcdtest(fem1, test="cd")
+```
+
+## Matriks Jarak
+
+```{r}
+longlat <- read_excel("D:/Project/_2023/Analisis Spasial Belitung/Databelitung.xlsx", sheet  = "longlat")
+longlat <- cbind(longlat$Long,longlat$Lat)
+longlat <- simplify2array(longlat)
+nrow(longlat)
+#Catatan: Alternatif longlat dapat diperoleh dari `coordinates(jateng.map)`
+```
+
+### K-nearest neighbour
+
+```{r}
+neighbour = knearneigh(longlat, k=1, longlat=T) # K=3 Tetangga terdekat
+neighbourlist = knn2nb(neighbour)                               
+mat.knn1 = nb2mat(neighbourlist, style="W")                     
+W.knn1 = nb2listw(neighbourlist, style="W")                   
+W.knn1
+```
+```{r}
+neighbour = knearneigh(longlat, k=2, longlat=T) # K=3 Tetangga terdekat
+neighbourlist = knn2nb(neighbour)                               
+mat.knn2 = nb2mat(neighbourlist, style="W")                     
+W.knn2 = nb2listw(neighbourlist, style="W")                   
+W.knn2
+```
+### Fungsi Kernel 
+```{r}
+#Pembobot Fungsi Kernel
+library(GWmodel)
+w11=gw.dist(dp.locat = longlat)
+w2=gw.weight(vdist = w11, bw=2,kernel = "gaussian",adaptive = TRUE)
+dlist1=mat2listw(w2)
+```
+### Matriks Jarak Radial
+```{r}
+k1 <- knn2nb(knearneigh(longlat))
+all.linked <- max(unlist(nbdists(k1, longlat)))
+W.r150 <- dnearneigh(longlat, 0, 150*(all.linked), longlat=TRUE)
+W.r150 <- nb2listw(W.r150,style='W') 
+
+k1 <- knn2nb(knearneigh(longlat))
+all.linked <- max(unlist(nbdists(k1, longlat)))
+W.r200 <- dnearneigh(longlat, 0, 200*(all.linked), longlat=TRUE)
+W.r200 <- nb2listw(W.r200,style='W') 
+
+k1 <- knn2nb(knearneigh(longlat))
+all.linked <- max(unlist(nbdists(k1, longlat)))
+W.r300 <- dnearneigh(longlat, 0, 300*(all.linked), longlat=TRUE)
+W.r300 <- nb2listw(W.r300,style='W') 
+```
+
+## Pemodelan
+
+### Jarak KNN
+
+#### SAR KNN1
+
+```{r}
+sar.fem.knn1 = spml(modelpanel2, data=panelbelitung, listw=W.knn1, model="within", lag=TRUE, spatial.error="none")
+
+sar.rem.knn1 = spml(modelpanel2, data=panelbelitung, listw=W.knn1, model="random", lag=TRUE, spatial.error="none")
+
+sphtest(sar.rem.knn1,sar.fem.knn1)
+```
+
+#### SEM KNN1
+
+```{r}
+sem.fem.knn1 = spml(modelpanel2, data=panelbelitung, listw=W.knn1, model="within", lag=FALSE, spatial.error="b")
+
+sem.rem.knn1 = spml(modelpanel2, data=panelbelitung, listw=W.knn1, model="random", lag=FALSE, spatial.error="b")
+
+sphtest(sem.fem.knn1,sem.rem.knn1)
+```
+
+#### SARAR KNN1
+
+```{r}
+sarar.fem.knn1 = spml(modelpanel2, data=panelbelitung, listw=W.knn1, model="within", lag=TRUE, spatial.error="b")
+
+sarar.rem.knn1 = spml(modelpanel2, data=panelbelitung, listw=W.knn1, model="random", lag=TRUE, spatial.error="b")
+
+sphtest(sarar.fem.knn1,sarar.rem.knn1)
+```
+
+#### SAR KNN2
+
+```{r}
+sar.fem.knn2 = spml(modelpanel2, data=panelbelitung, listw=W.knn2, model="within", lag=TRUE, spatial.error="none")
+
+sar.rem.knn2 = spml(modelpanel2, data=panelbelitung, listw=W.knn2, model="random", lag=TRUE, spatial.error="none")
+
+sphtest(sar.rem.knn2,sar.fem.knn2)
+```
+
+#### SEM KNN2
+
+```{r}
+sem.fem.knn2 = spml(modelpanel2, data=panelbelitung, listw=W.knn2, model="within", lag=FALSE, spatial.error="b")
+
+sem.rem.knn2 = spml(modelpanel2, data=panelbelitung, listw=W.knn2, model="random", lag=FALSE, spatial.error="b")
+
+sphtest(sem.fem.knn2,sem.rem.knn2)
+```
+
+#### SARAR KNN2
+
+```{r}
+sarar.fem.knn2 = spml(modelpanel2, data=panelbelitung, listw=W.knn2, model="within", lag=TRUE, spatial.error="b")
+
+sarar.rem.knn2 = spml(modelpanel2, data=panelbelitung, listw=W.knn2, model="random", lag=TRUE, spatial.error="b")
+
+sphtest(sarar.fem.knn2,sarar.rem.knn2)
+```
+
+### Jarak Radial
+
+#### SAR R150
+
+```{r}
+sar.fem.r150 = spml(modelpanel2, data=panelbelitung, listw=W.r150, model="within", lag=TRUE, spatial.error="none")
+
+sar.rem.r150 = spml(modelpanel2, data=panelbelitung, listw=W.r150, model="random", lag=TRUE, spatial.error="none")
+
+sphtest(sar.rem.r150,sar.fem.r150)
+```
+
+#### SEM R150
+
+```{r}
+sem.fem.r150 = spml(modelpanel2, data=panelbelitung, listw=W.r150, model="within", lag=FALSE, spatial.error="b")
+
+sem.rem.r150 = spml(modelpanel2, data=panelbelitung, listw=W.r150, model="random", lag=FALSE, spatial.error="b")
+
+sphtest(sem.fem.r150,sem.rem.r150)
+```
+
+#### SARAR R150
+
+```{r}
+sarar.fem.r150 = spml(modelpanel2, data=panelbelitung, listw=W.r150, model="within", lag=TRUE, spatial.error="b")
+
+sarar.rem.r150 = spml(modelpanel2, data=panelbelitung, listw=W.r150, model="random", lag=TRUE, spatial.error="b")
+
+sphtest(sarar.fem.r150,sarar.rem.r150)
+```
+#### SAR R200
+
+```{r}
+sar.fem.r200 = spml(modelpanel2, data=panelbelitung, listw=W.r200, model="within", lag=TRUE, spatial.error="none")
+
+sar.rem.r200 = spml(modelpanel2, data=panelbelitung, listw=W.r200, model="random", lag=TRUE, spatial.error="none")
+
+sphtest(sar.rem.r200,sar.fem.r200)
+```
+
+#### SEM R200
+
+```{r}
+sem.fem.r200 = spml(modelpanel2, data=panelbelitung, listw=W.r200, model="within", lag=FALSE, spatial.error="b")
+
+sem.rem.r200 = spml(modelpanel2, data=panelbelitung, listw=W.r200, model="random", lag=FALSE, spatial.error="b")
+
+sphtest(sem.fem.r200,sem.rem.r200)
+```
+
+#### SARAR R200
+
+```{r}
+sarar.fem.r200 = spml(modelpanel2, data=panelbelitung, listw=W.r200, model="within", lag=TRUE, spatial.error="b")
+
+sarar.rem.r200 = spml(modelpanel2, data=panelbelitung, listw=W.r200, model="random", lag=TRUE, spatial.error="b")
+
+sphtest(sarar.fem.r200,sarar.rem.r200)
+```
+#### SAR R300
+
+```{r}
+sar.fem.r300 = spml(modelpanel2, data=panelbelitung, listw=W.r300, model="within", lag=TRUE, spatial.error="none")
+
+sar.rem.r300 = spml(modelpanel2, data=panelbelitung, listw=W.r300, model="random", lag=TRUE, spatial.error="none")
+
+sphtest(sar.rem.r300,sar.fem.r300)
+```
+
+#### SEM R300
+
+```{r}
+sem.fem.r300 = spml(modelpanel2, data=panelbelitung, listw=W.r300, model="within", lag=FALSE, spatial.error="b")
+
+sem.rem.r300 = spml(modelpanel2, data=panelbelitung, listw=W.r300, model="random", lag=FALSE, spatial.error="b")
+
+sphtest(sem.fem.r300,sem.rem.r300)
+```
+
+#### SARAR R300
+
+```{r}
+sarar.fem.r300 = spml(modelpanel2, data=panelbelitung, listw=W.r300, model="within", lag=TRUE, spatial.error="b")
+
+sarar.rem.r300 = spml(modelpanel2, data=panelbelitung, listw=W.r300, model="random", lag=TRUE, spatial.error="b")
+
+sphtest(sarar.fem.r300,sarar.rem.r300)
+```
+### Jarak Kernel
+#### SAR DLIST1
+
+```{r}
+sar.fem.dlist1 = spml(modelpanel2, data=panelbelitung, listw=dlist1, model="within", lag=TRUE, spatial.error="none")
+
+sar.rem.dlist1 = spml(modelpanel2, data=panelbelitung, listw=dlist1, model="random", lag=TRUE, spatial.error="none")
+
+sphtest(sar.rem.dlist1,sar.fem.dlist1)
+```
+
+#### SEM DLIST1
+
+```{r}
+sem.fem.dlist1 = spml(modelpanel2, data=panelbelitung, listw=dlist1, model="within", lag=FALSE, spatial.error="b")
+
+sem.rem.dlist1 = spml(modelpanel2, data=panelbelitung, listw=dlist1, model="random", lag=FALSE, spatial.error="b")
+
+sphtest(sem.fem.dlist1,sem.rem.dlist1)
+```
+
+#### SARAR DLIST1
+
+```{r}
+sarar.fem.dlist1 = spml(modelpanel2, data=panelbelitung, listw=dlist1, model="within", lag=TRUE, spatial.error="b")
+
+sarar.rem.dlist1 = spml(modelpanel2, data=panelbelitung, listw=dlist1, model="random", lag=TRUE, spatial.error="b")
+
+sphtest(sarar.fem.dlist1,sarar.rem.dlist1)
+```
+
+
+### Evaluasi Model terbaik
+
+```{r}
+godf.spml<-function(object, k=2, criterion=c("AIC", "BIC"),  ...){
+  s<-summary(object)
+  l<-s$logLik
+  np<- length(coef(s))
+  N<- nrow(s$model)
+  if(criterion=="AIC"){
+    aic<- -2*l+k*np
+    names(aic)<-"AIC"
+    return(aic)
+  }
+  if(criterion=="BIC"){
+    bic<- -2*l+log(N)*np
+    names(bic)<-"BIC"
+    if(k!=2){
+      warning("parameter <k> not used for BIC")
+    }
+    return(bic)
+  }
+}
+```
+
+
+```{r}
+#Model Bobot Jarak KNN
+godf.spml(sar.rem.knn1, criterion="AIC")
+godf.spml(sem.rem.knn1, criterion="AIC")
+godf.spml(sarar.rem.knn1, criterion="AIC")
+godf.spml(sar.rem.knn2, criterion="AIC")
+godf.spml(sem.rem.knn2, criterion="AIC")
+godf.spml(sarar.rem.knn2, criterion="AIC")
+```
+```{r}
+paste0("Model Bobot Jarak Radial 150")
+godf.spml(sar.rem.r150, criterion="AIC")
+godf.spml(sem.rem.r150, criterion="AIC")
+godf.spml(sarar.rem.r150, criterion="AIC")
+paste0("Model Bobot Jarak Radial 200")
+godf.spml(sar.rem.r200, criterion="AIC")
+godf.spml(sem.rem.r200, criterion="AIC")
+godf.spml(sarar.rem.r200, criterion="AIC")
+paste0("Model Bobot Jarak Radial 300")
+godf.spml(sar.rem.r300, criterion="AIC")
+godf.spml(sem.rem.r300, criterion="AIC")
+godf.spml(sarar.rem.r300, criterion="AIC")
+```
+```{r}
+paste0("Model Bobot Jarak Fungi Kernel")
+godf.spml(sar.rem.dlist1, criterion="AIC")
+godf.spml(sem.rem.dlist1, criterion="AIC")
+godf.spml(sarar.rem.dlist1, criterion="AIC")
+```
+
+
+Model terbaik adalah model dengan AIC terkecil = Model terbaik adalah REM SARAR dengan bobot Radial 200
+
+```{r}
+summary(sarar.rem.r200)
+```
+
+## Menghitung Spillover
+
+```{r}
+# Model terbaik = sarar.rem.r200
+# Menghitung direct dan indirect effect
+time = length(unique(panelbelitung$Tahun))
+sW.r200 = kronecker(Diagonal(time), listw2dgCMatrix(W.r200))
+
+trMatc = trW(sW.r200, type="mult")
+set.seed(12345)
+imp = impacts(sarar.rem.r200, tr = trMatc, R = 200)
+summary(imp, zstats=TRUE, short=T)
+```
+
+## Visualisasi
+
+```{r}
+petanbelitung <- st_read("D:/Project/_2023/Analisis Spasial Belitung/Batas Administrasi Kep. BaBel/BaBel_AR.shp")
+```
+
+```{r}
+# Merge shapefile and stunting data based on the 'Kabupaten' column
+merged_data <- left_join(petanbelitung, panelbelitung[panelbelitung$Tahun==2019,], by = c("NAMOBJ" = "Kabupaten"))
+```
+
+```{r}
+# Plot
+ggplot(merged_data) +
+  geom_sf(aes(fill = Stunting)) + 
+  geom_sf_text(aes(label = NAMOBJ), size = 3) +
+  scale_fill_gradientn(colors = c("green", "red"), 
+                       name = "Jumlah Stunting") +
+  theme_minimal() +
+  labs(x="",y="", title = "Jumlah Stunting di Kep. BaBel")
+```
+```{r}
+panelbelitung2 <- panelbelitung %>% 
+                  group_by(Kabupaten) %>% 
+                  summarize(Stunting = mean(Stunting, na.rm=TRUE))
+merged_data2 <- left_join(petanbelitung, panelbelitung2, by = c("NAMOBJ" = "Kabupaten"))
+```
+```{r}
+ggplot(merged_data2) +
+  geom_sf(aes(fill = Stunting)) + 
+  geom_sf_text(aes(label = NAMOBJ), size = 3) +
+  scale_fill_gradientn(colors = c("green", "red"), 
+                       name = "Jumlah Stunting") +
+  theme_minimal() +
+  labs(x="",y="", title = "Jumlah Stunting di Kep. BaBel")
+```
+
+## LISA dan Moran
+### Moran
+```{r}
+time = length(unique(panelbelitung$Tahun))
+sW.r200 = kronecker(Diagonal(time), listw2dgCMatrix(W.r200))
+sW.r200 <- mat2listw(sW.r200)
+moran.test(panelbelitung$Stunting, sW.r200)
+```
+### LISA
+
+```{r}
+lmoran1.05 <- localmoran(panelbelitung2$Stunting, W.r200) %>% as.data.frame()
+```
+
+```{r}
+lmoran1.05$scale.data.05<- scale(panelbelitung2$Stunting)  %>% as.vector()
+
+# create a spatially lagged variable and save it to a new column
+lmoran1.05$lag.data.05 <- lag.listw(W.r200,lmoran1.05$scale.data.05)
+
+lmoran1.05$quad_sig.05 <- NA
+
+# high-high quadrant
+lmoran1.05[(lmoran1.05$scale.data.05 >= 0 &
+              lmoran1.05$lag.data.05 >= 0), "quad_sig.05"] <- "High-High"
+# low-low quadrant
+lmoran1.05[(lmoran1.05$scale.data.05 <= 0 & 
+              lmoran1.05$lag.data.05 <= 0), "quad_sig.05"] <- "Low-Low"
+# high-low quadrant
+lmoran1.05[(lmoran1.05$scale.data.05 >= 0 & 
+              lmoran1.05$lag.data.05 <= 0), "quad_sig.05"] <- "High-Low"
+# low-high quadrant
+lmoran1.05[(lmoran1.05$scale.data.05 <= 0 & 
+              lmoran1.05$lag.data.05 > -0.42), "quad_sig.05"] <- "Low-High"
+
+lmoran1.05$quad_sig.05 = lmoran1.05$quad_sig.05
+#write.csv(lmoran1.05,"local moran-rata2.csv")
+
+# moran sccaterplot dasar
+x1 <- lmoran1.05$scale.data.05
+text(moran.plot(x1, W.r200,labels = F, pch=19,xlab = ""),panelbelitung2$Kabupaten,cex=0.4, col="black",pos=1)
+```
+
+```{r}
+#Menggabungkan Data ke file SHP
+signifikansi=lmoran1.05$quad_sig.05
+Kabupaten=panelbelitung2$Kabupaten
+signifikansi=data.frame(cbind(Kabupaten,signifikansi))
+merged_data3 <- left_join(petanbelitung, signifikansi, by = c("NAMOBJ" = "Kabupaten"))
+```
+
+```{r}
+#Pemetaan
+ggplot(data=merged_data3) +
+  geom_sf(mapping=aes(fill =signifikansi)) +
+  geom_sf_text(aes(label=Kabupaten),size=3) +
+  scale_fill_manual(values=c("#56B4E9", "green", "yellow"))+
+  labs(x="",y="", fill="Kategori") + theme_minimal()
+```
